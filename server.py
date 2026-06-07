@@ -88,34 +88,8 @@ def _ts_to_str(ts) -> str:
 
 
 def _project_key_to_dir(key: str) -> str:
-    """C--Users-kakun -> C:\\Users\\kakun（逐级验证+回溯，处理 _ 被编码为 -）"""
-    path = key.replace("--", ":\\").replace("-", "\\")
-    if os.path.exists(path):
-        return path
-
-    parts = path.split("\\")
-    # 确保驱动器后带 \
-    current = parts[0] if parts[0].endswith("\\") else parts[0] + "\\"
-    if len(current) == 2 and current[1] == ":":
-        current += "\\"
-
-    i = 1
-    while i < len(parts):
-        parent = current.rstrip("\\")
-        best = _try_match(parent, parts, i)
-        if best:
-            current, i = best
-        else:
-            # 找不到，回溯：退回上一级，把上一段和当前段合并
-            prev = parent[:parent.rfind("\\")] if "\\" in parent else parent
-            if prev and prev != parent:
-                backtrack = _try_match(prev, parts, i - 1)
-                if backtrack:
-                    current, i = backtrack
-                    continue
-            current = parent + "\\" + parts[i] if not parent.endswith("\\") else parent + parts[i]
-            i += 1
-    return current
+    """C--Users-kakun -> C:\\Users\\kakun（快速字符串替换）"""
+    return key.replace("--", ":\\").replace("-", "\\")
 
 
 def _try_match(parent: str, parts: list, start: int):
@@ -217,14 +191,72 @@ def _save_labels(labels: dict):
     LABELS_FILE.write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# MCP 状态（启动时检测一次，后续用缓存）
+_mcp_online = False
+
+
+def _check_mcp():
+    """启动时检测 MCP 是否可用"""
+    global _mcp_online
+    try:
+        req = urllib.request.Request(f"{MCP_WEB_URL}/api/projects")
+        urllib.request.urlopen(req, timeout=1)
+        _mcp_online = True
+    except Exception:
+        _mcp_online = False
+
+
 def _mcp_api(path: str) -> dict | list | None:
-    """调用 MCP Sessions Web API（自带正确路径解析）"""
+    """调用 MCP Sessions Web API"""
     try:
         req = urllib.request.Request(f"{MCP_WEB_URL}{path}")
         resp = urllib.request.urlopen(req, timeout=5)
         return json.loads(resp.read())
     except Exception:
         return None
+
+
+def _get_sessions_fallback(project_path: Path, project_key: str = "", sort_by: str = "time_desc") -> list[dict]:
+    """MCP 不可用时的降级方案：直接读取本地 JSONL 文件"""
+    sort_keys = {
+        "time_desc": lambda s: s["last_ts"],
+        "time_asc": lambda s: -s["last_ts"],
+        "size": lambda s: s["size_bytes"],
+        "messages": lambda s: s["message_count"],
+    }
+    sessions = []
+    if not project_path.exists():
+        return sessions
+
+    for f in sorted(project_path.glob("*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True):
+        sid = f.stem
+        stat = f.stat()
+        msg_count = _count_jsonl(f)
+        title = sid[:8]
+        created_at = _ts_to_str(int(stat.st_mtime))
+        last_ts = int(stat.st_mtime)
+        last_time = _ts_to_str(last_ts)
+
+        for m in _read_jsonl(f, limit=3):
+            if m.get("type") == "user":
+                title = str(m.get("message", {}).get("content", ""))[:100]
+                break
+
+        work_dir = _project_key_to_dir(project_key) if project_key else ""
+        sessions.append({
+            "id": sid,
+            "message_count": msg_count,
+            "size_bytes": stat.st_size,
+            "size_display": _format_size(stat.st_size),
+            "title": title or f"会话 {sid[:8]}",
+            "created_at": created_at,
+            "last_message_at": last_time,
+            "last_ts": last_ts,
+            "resume_command": f'cd /d "{work_dir}" && claude --resume {sid}' if work_dir else f"claude --resume {sid}",
+        })
+
+    sessions.sort(key=sort_keys.get(sort_by, sort_keys["time_desc"]), reverse=True)
+    return sessions
 
 
 # ── static files ─────────────────────────────────────────────
@@ -238,79 +270,97 @@ def index():
 
 @app.route("/api/projects")
 def api_projects():
-    """列出所有项目（通过 MCP API）"""
-    mcp_data = _mcp_api("/api/projects")
-    if not mcp_data:
-        return jsonify([])
-
+    """列出所有项目（优先 MCP，降级本地文件）"""
     projects = []
-    for p in mcp_data:
-        key = p.get("name", "")
-        display = p.get("displayName", key)
-        # 规范化路径显示
-        if display == "~":
-            display = str(Path.home())
-        elif display.startswith("~/"):
-            display = str(Path.home() / display[2:])
-        display = display.replace("/", "\\")
+    mcp_data = _mcp_api("/api/projects") if _mcp_online else None
 
-        # 补充 memory 文件信息
-        proj_dir = PROJECTS_DIR / key
-        memory_files = []
-        if (proj_dir / "memory").exists():
-            memory_files = [f.name for f in (proj_dir / "memory").glob("*.md")]
+    if mcp_data:
+        # MCP 模式：路径正确
+        for p in mcp_data:
+            key = p.get("name", "")
+            display = p.get("displayName", key)
+            if display == "~":
+                display = str(Path.home())
+            elif display.startswith("~/"):
+                display = str(Path.home() / display[2:])
+            display = display.replace("/", "\\")
 
-        session_count = p.get("sessionCount", 0)
-        projects.append({
-            "key": key,
-            "name": display,
-            "session_count": session_count,
-            "total_size": "0 B",  # MCP 暂不提供大小
-            "memory_files": memory_files,
-        })
+            proj_dir = PROJECTS_DIR / key
+            memory_files = [f.name for f in (proj_dir / "memory").glob("*.md")] if (proj_dir / "memory").exists() else []
+
+            projects.append({
+                "key": key,
+                "name": display,
+                "session_count": p.get("sessionCount", 0),
+                "total_size": "-",
+                "memory_files": memory_files,
+            })
+    else:
+        # Fallback：本地文件（不读会话详情，仅文件名扫描）
+        if PROJECTS_DIR.exists():
+            for d in sorted(PROJECTS_DIR.iterdir()):
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                jsons = list(d.glob("*.jsonl"))
+                memory_files = [f.name for f in (d / "memory").glob("*.md")] if (d / "memory").exists() else []
+                projects.append({
+                    "key": d.name,
+                    "name": _project_key_to_dir(d.name),
+                    "session_count": len(jsons),
+                    "total_size": _format_size(sum(f.stat().st_size for f in jsons)),
+                    "memory_files": memory_files,
+                })
 
     return jsonify(projects)
 
 
 @app.route("/api/sessions/<path:project_key>")
 def api_sessions(project_key: str):
-    """列出项目下所有会话（通过 MCP API）+ 自定义标签"""
+    """列出项目下所有会话（优先 MCP，降级本地文件）+ 自定义标签"""
     labels = _load_labels()
-    # 获取 MCP 项目数据以得到正确路径
-    mcp_projects = _mcp_api("/api/projects") or []
-    work_dir = ""
-    for p in mcp_projects:
-        if p.get("name") == project_key:
-            work_dir = p.get("displayName", "").replace("/", "\\")
-            if work_dir == "~":
-                work_dir = str(Path.home())
-            break
-
-    sessions_raw = _mcp_api(f"/api/sessions?project={project_key}")
-    if not sessions_raw:
-        sessions_raw = []
-
-    sessions = []
-    for s in sessions_raw:
-        sid = s.get("id", "")
-        sessions.append({
-            "id": sid,
-            "message_count": int(s.get("messageCount", 0)),
-            "size_bytes": 0,
-            "size_display": "-",
-            "title": s.get("title", f"会话 {sid[:8]}")[:100],
-            "created_at": s.get("createdAt", ""),
-            "last_message_at": s.get("updatedAt", ""),
-            "last_ts": 0,
-            "label": labels.get(sid, ""),
-            "resume_command": f'cd /d "{work_dir}" && claude --resume {sid}' if work_dir else f"claude --resume {sid}",
-        })
+    try:
+        proj_path = _safe_path(project_key, PROJECTS_DIR)
+    except ValueError:
+        abort(400)
 
     sort_by = request.args.get("sort", "time_desc")
-    if sort_by == "time_asc":
-        sessions.reverse()
-    elif sort_by == "messages":
-        sessions.sort(key=lambda s: s["message_count"], reverse=True)
+
+    if _mcp_online:
+        mcp_projects = _mcp_api("/api/projects") or []
+        work_dir = ""
+        for p in mcp_projects:
+            if p.get("name") == project_key:
+                work_dir = p.get("displayName", "").replace("/", "\\")
+                if work_dir == "~":
+                    work_dir = str(Path.home())
+                break
+
+        sessions_raw = _mcp_api(f"/api/sessions?project={project_key}") or []
+        sessions = []
+        for s in sessions_raw:
+            sid = s.get("id", "")
+            sessions.append({
+                "id": sid,
+                "message_count": int(s.get("messageCount", 0)),
+                "size_bytes": 0,
+                "size_display": "-",
+                "title": s.get("title", f"会话 {sid[:8]}")[:100],
+                "created_at": s.get("createdAt", ""),
+                "last_message_at": s.get("updatedAt", ""),
+                "last_ts": 0,
+                "label": labels.get(sid, ""),
+                "resume_command": f'cd /d "{work_dir}" && claude --resume {sid}' if work_dir else f"claude --resume {sid}",
+            })
+
+        if sort_by == "time_asc":
+            sessions.reverse()
+        elif sort_by == "messages":
+            sessions.sort(key=lambda s: s["message_count"], reverse=True)
+    else:
+        sessions = _get_sessions_fallback(proj_path, project_key=project_key, sort_by=sort_by)
+        for s in sessions:
+            if s["id"] in labels:
+                s["label"] = labels[s["id"]]
 
     return jsonify(sessions)
 
@@ -799,15 +849,19 @@ NOTIFY_SCRIPT = str(SKILLS_DIRS[0] / "task-notifier" / "scripts" / "notify.ps1")
 def api_resume_session(project_key: str, session_id: str):
     """在 CMD 窗口中启动 Claude Code 会话"""
     session_id = os.path.basename(session_id)
-    # 从 MCP 获取项目路径
-    mcp_projects = _mcp_api("/api/projects") or []
     work_dir = ""
-    for p in mcp_projects:
-        if p.get("name") == project_key:
-            work_dir = p.get("displayName", "").replace("/", "\\")
-            if work_dir == "~":
-                work_dir = str(Path.home())
-            break
+
+    if _mcp_online:
+        mcp_projects = _mcp_api("/api/projects") or []
+        for p in mcp_projects:
+            if p.get("name") == project_key:
+                work_dir = p.get("displayName", "").replace("/", "\\")
+                if work_dir == "~":
+                    work_dir = str(Path.home())
+                break
+
+    if not work_dir:
+        work_dir = _project_key_to_dir(project_key)
 
     if not work_dir:
         abort(400, "无法确定项目目录")
@@ -859,9 +913,13 @@ def main():
     host = "127.0.0.1"
     port = 19876
 
+    # 启动时检测 MCP 状态
+    _check_mcp()
+
     print(f"\n== Claude Code Conversation Manager ==")
     print(f"   URL: http://{host}:{port}")
     print(f"   Data: {CLAUDE_DIR}")
+    print(f"   MCP: {'connected' if _mcp_online else 'fallback mode (local files)'}")
     print(f"   Press Ctrl+C to stop\n")
 
     if "--no-browser" not in sys.argv:
