@@ -2,6 +2,16 @@
 
 浏览器端的 Claude Code 对话历史与 Skills 管理器。配合 [Aemeath 桌宠](https://github.com/77wliNd/aemeath_withclaude) 右键菜单一键打开。
 
+## ⚡ Claude Code 一键部署
+
+复制以下提示词发送给你的 Claude Code，自动完成部署：
+
+```
+请根据 https://github.com/hanasite/claude-code-webui/blob/master/CLAUDE.md 部署 Claude Code 对话管理 WebUI，包括克隆仓库、安装 Flask 依赖、启动服务并验证。
+```
+
+部署内容：git clone → `~/.claude/webui/` → pip install flask → 启动 → 打开浏览器
+
 ## 功能
 
 | 模块 | 功能 |
