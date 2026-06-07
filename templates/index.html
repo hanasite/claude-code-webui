@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Claude Code — 对话与 Skills 管理</title>
+<style>
+  :root {
+    --bg: #090B10; --bg2: #111318; --bg3: #1A1D25; --bg4: #242733;
+    --border: #2A2D38; --border-light: #353849;
+    --text: #E8ECF1; --text2: #8E94A5; --text3: #5C6174;
+    --orange: #FF8C3C; --orange2: #E67A2E;
+    --green: #3DD68C; --green-bg: #0F1F18;
+    --blue: #4DA2FF; --blue-bg: #0F1B2D;
+    --purple: #B57BEE; --purple-bg: #1A1530;
+    --red: #F14646; --red-bg: #1F1010;
+    --radius: 10px; --radius-sm: 6px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;overflow:hidden;font-size:13.5px;line-height:1.55;-webkit-font-smoothing:antialiased}
+
+  .sidebar{width:272px;min-width:272px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+  .sidebar-header{padding:18px 16px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .sidebar-header .logo{width:32px;height:32px;background:var(--orange);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#000;flex-shrink:0}
+  .sidebar-header h1{font-size:14px;font-weight:700;color:var(--text);letter-spacing:-0.2px}
+  .sidebar-header .sub{font-size:10px;color:var(--text3);font-weight:400}
+  .search-box{padding:10px 12px;border-bottom:1px solid var(--border)}
+  .search-box input{width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12.5px;outline:none;transition:all .2s}
+  .search-box input:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,140,60,.1)}
+  .search-box input::placeholder{color:var(--text3)}
+
+  .project-list{flex:1;overflow-y:auto;padding:6px 8px}
+  .project-list::-webkit-scrollbar,.main-content::-webkit-scrollbar,.messages::-webkit-scrollbar{width:4px}
+  .project-list::-webkit-scrollbar-thumb,.main-content::-webkit-scrollbar-thumb,.messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px}
+
+  .project-item{padding:9px 12px;border-radius:var(--radius-sm);cursor:pointer;transition:all .15s;margin-bottom:1px;display:flex;align-items:center;gap:10px;border:1px solid transparent}
+  .project-item:hover{background:var(--bg3)}
+  .project-item.active{background:var(--bg3);border-color:var(--orange)}
+  .project-item .icon{font-size:16px;flex-shrink:0;opacity:.7}
+  .project-item.active .icon{opacity:1}
+  .project-item .info{flex:1;min-width:0}
+  .project-item .name{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .project-item .meta{font-size:10.5px;color:var(--text3);margin-top:1px}
+  .project-item .badge{background:var(--bg4);color:var(--text2);font-size:10px;padding:2px 7px;border-radius:10px;font-weight:500;flex-shrink:0}
+  .project-item.active .badge{background:var(--orange);color:#000;font-weight:600}
+
+  .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .main-header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg2)}
+  .main-header .title{font-size:14px;font-weight:700}
+  .main-header .actions{display:flex;gap:8px;align-items:center}
+  .main-header .count{font-size:11.5px;color:var(--text3);margin-left:8px;font-weight:400}
+  .main-content{flex:1;overflow-y:auto;padding:20px 24px}
+
+  .session-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:8px;cursor:pointer;transition:all .2s}
+  .session-card:hover{border-color:var(--border-light);background:var(--bg3)}
+  .session-card.selected{border-color:var(--orange);background:var(--bg3)}
+  .session-card .s-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .session-card .s-title{font-size:13px;font-weight:600;line-height:1.4;flex:1}
+  .session-card .s-meta{font-size:11px;color:var(--text3);margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+  .session-card .s-actions{display:flex;gap:4px;flex-shrink:0}
+
+  .messages-panel{background:var(--bg2);border:1px solid var(--orange);border-radius:var(--radius);margin-top:12px;overflow:hidden}
+  .messages-panel .m-header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg3)}
+  .messages-panel .m-header .m-title{font-size:12.5px;font-weight:600}
+  .messages{max-height:60vh;overflow-y:auto;padding:14px 16px}
+  .msg{margin-bottom:8px;padding:10px 14px;border-radius:var(--radius-sm);border-left:3px solid transparent;font-size:13px}
+  .msg.user{background:var(--blue-bg);border-left-color:var(--blue)}
+  .msg.assistant{background:var(--green-bg);border-left-color:var(--green)}
+  .msg.tool{background:var(--purple-bg);border-left-color:var(--purple);font-size:12px}
+  .msg.meta{background:transparent;border-left-color:var(--text3);color:var(--text3);font-size:10.5px;padding:3px 10px}
+  .msg .role-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px}
+  .msg.user .role-label{color:var(--blue)}.msg.assistant .role-label{color:var(--green)}.msg.tool .role-label{color:var(--purple)}
+  .msg .ts{font-size:10px;color:var(--text3);float:right}
+  .msg .content{white-space:pre-wrap;word-break:break-word}
+  .msg .content code{background:rgba(0,0,0,.25);padding:1px 5px;border-radius:3px;font-size:12px}
+
+  .pagination{display:flex;justify-content:center;gap:4px;padding:10px 16px;border-top:1px solid var(--border)}
+  .pagination button{padding:4px 10px;border:1px solid var(--border);background:var(--bg3);color:var(--text);border-radius:var(--radius-sm);cursor:pointer;font-size:11.5px;transition:all .15s}
+  .pagination button:hover{background:var(--orange);color:#000;border-color:var(--orange)}
+  .pagination button.active{background:var(--orange);color:#000;border-color:var(--orange)}
+
+  .btn{padding:5px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg3);color:var(--text);cursor:pointer;font-size:11.5px;transition:all .15s;white-space:nowrap;font-weight:500}
+  .btn:hover{background:var(--border-light);border-color:var(--border-light)}
+  .btn.danger:hover{background:var(--red);border-color:var(--red);color:#fff}
+  .btn.accent{background:var(--orange);border-color:var(--orange);color:#000;font-weight:600}
+  .btn.accent:hover{background:var(--orange2);border-color:var(--orange2)}
+  .btn.resume{background:var(--green);border-color:var(--green);color:#000;font-weight:600}
+  .btn.resume:hover{background:#2EC47A}
+  .btn.rename{background:transparent;border:none;padding:2px 4px;font-size:12px;cursor:pointer;opacity:.4}
+  .btn.rename:hover{opacity:1}
+
+  .sort-select{padding:5px 8px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:11px;cursor:pointer;outline:none}
+  .sort-select:focus{border-color:var(--orange)}
+  .rename-input{background:var(--bg);border:1px solid var(--orange);color:var(--text);padding:2px 8px;border-radius:4px;font-size:13px;width:100%;max-width:400px;outline:none}
+  .sidebar-footer{padding:8px 10px;border-top:1px solid var(--border)}
+  .s-title .label-tag{background:var(--orange);color:#000;font-size:10px;padding:1px 6px;border-radius:8px;margin-right:6px;font-weight:600}
+
+  .skills-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+  .skill-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;transition:all .2s}
+  .skill-card:hover{border-color:var(--border-light);background:var(--bg3)}
+  .skill-card .sk-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
+  .skill-card .sk-name{font-size:14px;font-weight:600;color:var(--orange)}
+  .skill-card .sk-version{font-size:10px;color:var(--text3);background:var(--bg3);padding:2px 7px;border-radius:4px;flex-shrink:0;font-weight:500}
+  .skill-card .sk-desc{font-size:11.5px;color:var(--text2);margin-bottom:10px;line-height:1.5}
+  .skill-card .sk-meta{font-size:10px;color:var(--text3);display:flex;gap:14px}
+  .skill-card .sk-actions{display:flex;gap:6px;margin-top:12px}
+
+  .skill-detail{background:var(--bg2);border:1px solid var(--orange);border-radius:var(--radius);margin-top:12px;overflow:hidden}
+  .skill-detail .sd-header{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg3);display:flex;justify-content:space-between;align-items:center}
+  .skill-detail .sd-body{padding:16px;max-height:55vh;overflow-y:auto;font-size:13px;white-space:pre-wrap;line-height:1.6}
+
+  .search-install-row{display:flex;gap:10px;margin-bottom:16px}
+  .search-install-row input{flex:1;padding:9px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:13px;outline:none;transition:all .2s}
+  .search-install-row input:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,140,60,.1)}
+  .search-install-row button{flex-shrink:0}
+
+  .hub-result{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:12px;transition:all .15s}
+  .hub-result:hover{border-color:var(--border-light)}
+  .hub-result .hr-info{flex:1;min-width:0}
+  .hub-result .hr-name{font-size:13px;font-weight:600}
+  .hub-result .hr-desc{font-size:11px;color:var(--text2);margin-top:3px}
+  .hub-result .hr-meta{font-size:10px;color:var(--text3);margin-top:4px}
+
+  .search-result{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;transition:all .15s}
+  .search-result:hover{border-color:var(--border-light)}
+  .search-result .sr-header{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+  .search-result .sr-project{font-size:11px;color:var(--orange);font-weight:600}
+  .search-result .sr-session{font-size:10.5px;color:var(--text3)}
+  .search-result .sr-match{margin:4px 0;padding:8px 12px;background:var(--bg3);border-radius:var(--radius-sm);font-size:12px}
+  .search-result .sr-match .sr-type{font-size:10px;font-weight:700;margin-right:6px}
+  .search-result .sr-match .sr-type.user{color:var(--blue)}
+  .search-result .sr-match .sr-type.assistant{color:var(--green)}
+
+  .memory-panel{background:var(--bg2);border:1px solid var(--orange);border-radius:var(--radius);margin-top:12px;overflow:hidden}
+  .memory-panel .m-header{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg3);display:flex;justify-content:space-between;align-items:center}
+  .memory-panel .m-header .m-title{font-size:13px;font-weight:600}
+  .memory-file{padding:14px 16px;border-bottom:1px solid var(--border)}
+  .memory-file:last-child{border-bottom:none}
+  .memory-file .mf-name{font-size:13px;font-weight:600;margin-bottom:8px;color:var(--orange)}
+  .memory-file .mf-content{font-size:12px;color:var(--text2);white-space:pre-wrap;max-height:200px;overflow-y:auto;background:var(--bg3);padding:12px;border-radius:var(--radius-sm);line-height:1.6}
+
+  .empty{text-align:center;color:var(--text3);padding:80px 20px}
+  .empty .icon{font-size:40px;margin-bottom:14px;opacity:.5}
+
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--bg3);border:1px solid var(--border-light);padding:10px 20px;border-radius:var(--radius);font-size:13px;z-index:999;animation:slideIn .25s ease;box-shadow:0 2px 12px rgba(0,0,0,.3)}
+  @keyframes slideIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+  .loading{text-align:center;padding:40px;color:var(--text3)}
+  .spinner{display:inline-block;width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--orange);border-radius:50%;animation:spin .5s linear infinite;margin-right:8px;vertical-align:-3px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .detail-panel {
+    position:fixed; top:0; right:-520px; width:500px; height:100vh;
+    background:var(--bg2); border-left:1px solid var(--border);
+    z-index:100; transition:right .25s ease; display:flex; flex-direction:column;
+    box-shadow:-4px 0 24px rgba(0,0,0,.4);
+  }
+  .detail-panel.open { right:0; }
+  .detail-panel .dp-header {
+    padding:16px 18px; border-bottom:1px solid var(--border);
+    display:flex; justify-content:space-between; align-items:center;
+    background:var(--bg3); flex-shrink:0;
+  }
+  .detail-panel .dp-header .dp-title { font-size:14px; font-weight:700; color:var(--orange); }
+  .detail-panel .dp-body {
+    flex:1; overflow-y:auto; padding:18px; font-size:13px;
+    white-space:pre-wrap; line-height:1.65; color:var(--text2);
+  }
+  .detail-panel .dp-body h1,.detail-panel .dp-body h2,.detail-panel .dp-body h3 { color:var(--text); margin:12px 0 6px; }
+  .detail-panel .dp-meta { padding:12px 18px; border-top:1px solid var(--border); font-size:11px; color:var(--text3); flex-shrink:0; }
+  .detail-overlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:99; display:none; }
+  .detail-overlay.show { display:block; }
+
+  @media(max-width:768px){.sidebar{width:220px;min-width:220px}.main-header{padding:10px 14px}.main-content{padding:12px}.skills-grid{grid-template-columns:1fr}.detail-panel{width:100vw;right:-100vw}}
+</style>
+
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <span class="logo">📊</span>
+    <h1>对话管理</h1>
+  </div>
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="🔍 搜索所有对话..." onkeydown="if(event.key==='Enter')doSearch()">
+  </div>
+  <div class="project-list" id="projectList">
+    <div class="loading"><span class="spinner"></span>加载中...</div>
+  </div>
+  <div class="sidebar-footer">
+    <button class="btn accent" onclick="showSkills()" style="width:100%">🧩 管理 Skills</button>
+  </div>
+</aside>
+
+<!-- Main -->
+<main class="main">
+  <div class="main-header">
+    <div>
+      <span class="title" id="mainTitle">选择一个项目</span>
+      <span class="count" id="mainCount"></span>
+    </div>
+    <div class="actions" id="mainActions">
+      <select class="sort-select" id="sortSelect" onchange="resort()" style="display:none">
+        <option value="time_desc">最新 ↑</option>
+        <option value="time_asc">最早 ↑</option>
+        <option value="size">最大 ↑</option>
+        <option value="messages">最多消息 ↑</option>
+      </select>
+    </div>
+  </div>
+  <div class="main-content" id="mainContent">
+    <div class="empty">
+      <div class="icon">📂</div>
+      <p>左侧选择一个项目查看会话</p>
+    </div>
+  </div>
+</main>
+
+<!-- Detail slide-in panel -->
+<div class="detail-overlay" id="detailOverlay" onclick="closeDetail()"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="dp-header">
+    <span class="dp-title" id="dpTitle">Skill 详情</span>
+    <button class="btn" onclick="closeDetail()">✕ 关闭</button>
+  </div>
+  <div class="dp-body" id="dpBody">加载中...</div>
+  <div class="dp-meta" id="dpMeta"></div>
+</div>
+
+<script>
+const API = '';
+let currentProject = null;
+let currentSessionId = null;
+
+// ── Init ──
+(async () => { await loadProjects(); })();
+
+// ── Toast ──
+function toast(msg) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+// ── Fetch helper ──
+async function api(url) {
+  const r = await fetch(API + url);
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+// ── Projects ──
+async function loadProjects() {
+  const list = document.getElementById('projectList');
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) {
+      list.innerHTML = '<div class="empty"><p>暂无项目</p></div>';
+      return;
+    }
+    list.innerHTML = projects.map(p => `
+      <div class="project-item" data-key="${p.key}" onclick="selectProject('${p.key}','${p.name.replace(/'/g,"\\'")}')">
+        <span class="icon">📁</span>
+        <span class="info">
+          <div class="name">${esc(p.name)}</div>
+          <div class="meta">${p.session_count} 个会话 · ${p.total_size}</div>
+        </span>
+        <span class="badge">${p.session_count}</span>
+      </div>`).join('');
+  } catch (e) {
+    list.innerHTML = '<div class="empty"><p>加载失败</p></div>';
+  }
+}
+
+// ── Sessions ──
+let currentSort = 'time_desc';
+
+async function selectProject(key, name) {
+  currentProject = key;
+  currentSessionId = null;
+  document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-key="${key}"]`)?.classList.add('active');
+  document.getElementById('mainTitle').textContent = name;
+  document.getElementById('mainCount').textContent = '';
+  await loadSessions();
+}
+
+async function resort() {
+  currentSort = document.getElementById('sortSelect').value;
+  await loadSessions();
+}
+
+async function loadSessions() {
+  const mc = document.getElementById('mainContent');
+  mc.innerHTML = '<div class="loading"><span class="spinner"></span>加载会话列表...</div>';
+
+  try {
+    const sessions = await api(`/api/sessions/${currentProject}?sort=${currentSort}`);
+    document.getElementById('mainCount').textContent = `(${sessions.length} 个会话)`;
+    document.getElementById('mainActions').innerHTML = `
+      <select class="sort-select" id="sortSelect" onchange="resort()">
+        <option value="time_desc" ${currentSort==='time_desc'?'selected':''}>最新 ↑</option>
+        <option value="time_asc" ${currentSort==='time_asc'?'selected':''}>最早 ↑</option>
+        <option value="size" ${currentSort==='size'?'selected':''}>最大 ↑</option>
+        <option value="messages" ${currentSort==='messages'?'selected':''}>最多消息 ↑</option>
+      </select>
+      <button class="btn" onclick="loadMemory('${currentProject}')">记忆</button>
+    `;
+    if (!sessions.length) {
+      mc.innerHTML = '<div class="empty"><div class="icon">/</div><p>暂无会话记录</p></div>';
+      return;
+    }
+    mc.innerHTML = sessions.map(s => `
+      <div class="session-card" id="sc-${s.id}" onclick="toggleSession('${s.id}')">
+        <div class="s-top">
+          <div class="s-title">
+            ${s.label ? `<span class="label-tag">${esc(s.label)}</span>` : ''}
+            <span id="title-${s.id}">${esc(s.label || s.title)}</span>
+            <button class="btn rename" onclick="event.stopPropagation();startRename('${s.id}')" title="重命名">✏️</button>
+          </div>
+          <div class="s-actions" onclick="event.stopPropagation()">
+            <button class="btn resume" onclick="resumeSession('${s.id}')" title="启动此会话">▶ 启动</button>
+            <button class="btn" onclick="exportSession('${s.id}')" title="导出 Markdown">📥</button>
+            <button class="btn danger" onclick="deleteSession('${s.id}')" title="删除">🗑</button>
+          </div>
+        </div>
+        <div class="s-meta">
+          <span>📨 ${s.message_count} 条消息</span>
+          <span>💾 ${s.size_display}</span>
+          <span>🕐 ${s.created_at}</span>
+          ${s.last_message_at !== s.created_at ? `<span>→ ${s.last_message_at}</span>` : ''}
+          <span style="font-size:10px;color:var(--text2)">ID: ${s.id.slice(0,8)}…</span>
+        </div>
+        <div class="messages-panel" id="msg-${s.id}" style="display:none"></div>
+      </div>`).join('');
+  } catch (e) {
+    mc.innerHTML = '<div class="empty"><p>加载失败</p></div>';
+  }
+}
+
+// ── Toggle session ──
+async function toggleSession(sid) {
+  const panel = document.getElementById(`msg-${sid}`);
+  const card = document.getElementById(`sc-${sid}`);
+
+  if (panel.style.display === 'none') {
+    // close others
+    document.querySelectorAll('.messages-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.session-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    currentSessionId = sid;
+
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="loading"><span class="spinner"></span>加载消息...</div>';
+    await loadMessages(sid, 1);
+  } else {
+    panel.style.display = 'none';
+    card.classList.remove('selected');
+    currentSessionId = null;
+  }
+}
+
+async function loadMessages(sid, page) {
+  const panel = document.getElementById(`msg-${sid}`);
+  try {
+    const data = await api(`/api/session/${currentProject}/${sid}?page=${page}&per=80`);
+    panel.innerHTML = `
+      <div class="m-header">
+        <span class="m-title">📋 ${data.total} 条消息 (第 ${data.page}/${data.pages} 页)</span>
+        <button class="btn" onclick="event.stopPropagation();toggleSession('${sid}')">✕ 关闭</button>
+      </div>
+      <div class="messages">
+        ${data.messages.map(m => `
+          <div class="msg ${m.role}">
+            <span class="ts">${m.timestamp}</span>
+            <div class="role-label">${m.role === 'user' ? '🙋 用户' : m.role === 'assistant' ? '🤖 Claude' : m.role === 'tool' ? '🔧 工具' : '⚙️ 系统'}</div>
+            <div class="content">${esc(m.content)}</div>
+          </div>`).join('')}
+      </div>
+      ${data.pages > 1 ? `
+        <div class="pagination">
+          ${Array.from({length: data.pages}, (_, i) => `
+            <button class="${i+1 === data.page ? 'active' : ''}" onclick="event.stopPropagation();loadMessages('${sid}',${i+1})">${i+1}</button>
+          `).join('')}
+        </div>` : ''}
+    `;
+
+    // scroll to top of messages
+    panel.querySelector('.messages')?.scrollTo(0, 0);
+  } catch (e) {
+    panel.innerHTML = '<div class="loading">加载失败</div>';
+  }
+}
+
+// ── Delete ──
+async function deleteSession(sid) {
+  if (!confirm('确定要删除这个会话吗？此操作不可撤销。')) return;
+  try {
+    const r = await fetch(API + `/api/session/${currentProject}/${sid}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) {
+      toast('已删除');
+      selectProject(currentProject, document.getElementById('mainTitle').textContent);
+    }
+  } catch (e) {
+    toast('删除失败');
+  }
+}
+
+// ── Export ──
+async function exportSession(sid) {
+  try {
+    const r = await fetch(API + `/api/export/${currentProject}/${sid}`);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `session-${sid.slice(0,8)}.md`;
+    a.click();
+    toast('导出完成');
+  } catch (e) {
+    toast('导出失败');
+  }
+}
+
+// ── Search ──
+async function doSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (q.length < 2) { toast('请输入至少 2 个字符'); return; }
+
+  currentProject = null;
+  currentSessionId = null;
+  document.getElementById('mainTitle').textContent = `搜索: ${q}`;
+  document.getElementById('mainCount').textContent = '';
+  document.getElementById('mainActions').innerHTML = '';
+  const mc = document.getElementById('mainContent');
+  mc.innerHTML = '<div class="loading"><span class="spinner"></span>搜索中...</div>';
+
+  try {
+    const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    document.getElementById('mainCount').textContent = `(${data.results.length} 个会话匹配)`;
+    if (!data.results.length) {
+      mc.innerHTML = '<div class="empty"><div class="icon">🔍</div><p>未找到匹配结果</p></div>';
+      return;
+    }
+    mc.innerHTML = data.results.map(r => `
+      <div class="search-result">
+        <div class="sr-header">
+          <span class="sr-project">${esc(r.project)}</span>
+          <span class="sr-session">${r.session_id.slice(0,12)}…</span>
+          <button class="btn accent" onclick="selectProject('${r.project}','${r.project}');setTimeout(()=>toggleSession('${r.session_id}'),500)">查看</button>
+        </div>
+        ${r.matches.slice(0,10).map(m => `
+          <div class="sr-match">
+            <span class="sr-type ${m.type}">${m.type === 'user' ? '🙋' : '🤖'} ${m.type}</span>
+            <span class="sr-ts" style="font-size:10px;color:var(--text2)">${m.timestamp}</span>
+            <div style="margin-top:2px">${esc(m.preview)}</div>
+          </div>
+        `).join('')}
+        ${r.matches.length > 10 ? `<div style="font-size:11px;color:var(--text2);padding:4px">…还有 ${r.matches.length - 10} 条匹配</div>` : ''}
+      </div>
+    `).join('');
+  } catch (e) {
+    mc.innerHTML = '<div class="empty"><p>搜索失败</p></div>';
+  }
+}
+
+// ── Memory ──
+async function loadMemory(key) {
+  const mc = document.getElementById('mainContent');
+  mc.innerHTML = '<div class="loading"><span class="spinner"></span>加载记忆...</div>';
+
+  try {
+    const files = await api(`/api/memory/${key}`);
+    if (!files.length) {
+      mc.innerHTML = '<div class="empty"><div class="icon">🧠</div><p>该项目无记忆文件</p></div>';
+      return;
+    }
+    mc.innerHTML = `
+      <div class="memory-panel">
+        <div class="m-header">
+          <span class="m-title">🧠 项目记忆 (${files.length} 个文件)</span>
+          <button class="btn" onclick="selectProject('${key}','${document.getElementById('mainTitle').textContent}')">← 返回会话列表</button>
+        </div>
+        ${files.map(f => `
+          <div class="memory-file">
+            <div class="mf-name">📄 ${esc(f.name)} <span style="font-size:11px;color:var(--text2)">(${f.size} · ${f.modified})</span></div>
+            <div class="mf-content">${esc(f.content)}</div>
+          </div>
+        `).join('')}
+      </div>`;
+  } catch (e) {
+    mc.innerHTML = '<div class="empty"><p>加载失败</p></div>';
+  }
+}
+
+// ── Rename ──
+function startRename(sid) {
+  const titleEl = document.getElementById(`title-${sid}`);
+  if (!titleEl) return;
+  const current = titleEl.textContent;
+  titleEl.innerHTML = `<input class="rename-input" id="renameInput-${sid}" value="${esc(current)}" onkeydown="if(event.key==='Enter')saveRename('${sid}')" onblur="saveRename('${sid}')" onclick="event.stopPropagation()">`;
+  const inp = document.getElementById(`renameInput-${sid}`);
+  inp.focus(); inp.select();
+}
+
+async function saveRename(sid) {
+  const inp = document.getElementById(`renameInput-${sid}`);
+  if (!inp) return;
+  const label = inp.value.trim();
+  if (label) {
+    await fetch(API + `/api/labels/${sid}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({label})
+    });
+  } else {
+    await fetch(API + `/api/labels/${sid}`, { method: 'DELETE' });
+  }
+  // reload
+  loadSessions();
+}
+
+// ── Resume ──
+async function resumeSession(sid) {
+  const cmd = `claude --resume ${sid}`;
+  try {
+    await navigator.clipboard.writeText(cmd);
+    toast(`已复制命令: ${cmd}`);
+  } catch (e) {
+    toast(`请在终端运行: ${cmd}`);
+  }
+}
+
+// ── Skills ──
+async function showSkills() {
+  currentProject = null; currentSessionId = null;
+  document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+  document.getElementById('mainTitle').textContent = 'Skills 管理';
+  document.getElementById('mainCount').textContent = '';
+  document.getElementById('mainActions').innerHTML = '';
+  await loadSkills();
+}
+
+async function loadSkills() {
+  const mc = document.getElementById('mainContent');
+  mc.innerHTML = '<div class="loading"><span class="spinner"></span>加载 Skills...</div>';
+
+  try {
+    const skills = await api('/api/skills');
+    document.getElementById('mainCount').textContent = `(${skills.length} 个已安装)`;
+    mc.innerHTML = `
+      <div class="search-install-row">
+        <input type="text" id="hubSearch" placeholder="🔍 搜索 SkillHub 市场..." onkeydown="if(event.key==='Enter')searchHub()">
+        <button class="btn accent" onclick="searchHub()">搜索并安装</button>
+      </div>
+      <div id="hubResults"></div>
+      ${skills.length === 0 ? '<div class="empty"><div class="icon">🧩</div><p>暂无已安装的 Skills</p></div>' : ''}
+      <div class="skills-grid">
+        ${skills.map(s => `
+          <div class="skill-card">
+            <div class="sk-header">
+              <span class="sk-name">${esc(s.display_name)}</span>
+              <span class="sk-version">v${esc(s.version) || '?'}</span>
+            </div>
+            <div class="sk-desc">${esc(s.description)}</div>
+            <div class="sk-meta">
+              <span>📁 ${esc(s.name)}</span>
+              ${s.slug ? `<span>🔗 ${esc(s.slug)}</span>` : ''}
+              <span>${s.source === 'claude' ? '🏠' : '📦'} ${s.source}</span>
+            </div>
+            <div class="sk-actions">
+              <button class="btn" onclick="viewSkill('${s.name}')">👁️ 查看</button>
+              <button class="btn danger" onclick="deleteSkill('${s.name}')">🗑 卸载</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+  } catch (e) {
+    mc.innerHTML = '<div class="empty"><p>加载失败</p></div>';
+  }
+}
+
+async function searchHub() {
+  const q = document.getElementById('hubSearch')?.value.trim();
+  if (!q) { toast('请输入搜索关键词'); return; }
+
+  const hubEl = document.getElementById('hubResults');
+  hubEl.innerHTML = '<div class="loading"><span class="spinner"></span>搜索 SkillHub...</div>';
+
+  try {
+    const data = await api(`/api/skills?mode=search&q=${encodeURIComponent(q)}`);
+    if (data.error) { hubEl.innerHTML = `<div class="empty"><p>搜索失败: ${esc(data.error)}</p></div>`; return; }
+    if (!data.results.length) { hubEl.innerHTML = '<div class="empty"><p>未找到匹配的 Skills</p></div>'; return; }
+    hubEl.innerHTML = data.results.map(r => `
+      <div class="hub-result">
+        <div class="hr-info">
+          <div class="hr-name">${esc(r.name)} <span style="font-size:10px;color:var(--text2)">v${esc(r.version)}</span></div>
+          <div class="hr-desc">${esc(r.description)}</div>
+          <div class="hr-meta">
+            ⭐ ${r.stars} · 📥 ${(r.downloads/1000).toFixed(0)}K · 👤 ${esc(r.owner)} · ${esc(r.source)}
+          </div>
+        </div>
+        <button class="btn accent" onclick="installSkill('${r.slug}')">安装</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    hubEl.innerHTML = '<div class="empty"><p>搜索失败</p></div>';
+  }
+}
+
+async function installSkill(slug) {
+  toast(`正在安装 ${slug}...`);
+  try {
+    const r = await fetch(API + '/api/skills/install', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug})
+    });
+    const d = await r.json();
+    if (d.ok) { toast(`已安装: ${d.name}`); loadSkills(); }
+    else { toast(`安装失败: ${d.error}`); }
+  } catch (e) {
+    toast('安装失败');
+  }
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('open');
+  document.getElementById('detailOverlay').classList.remove('show');
+}
+
+async function viewSkill(name) {
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('detailOverlay');
+  document.getElementById('dpTitle').textContent = name;
+  document.getElementById('dpBody').innerHTML = '<div class="loading"><span class="spinner"></span>加载中...</div>';
+  document.getElementById('dpMeta').textContent = '';
+  panel.classList.add('open');
+  overlay.classList.add('show');
+
+  try {
+    const data = await api(`/api/skills/${name}`);
+    document.getElementById('dpTitle').textContent = data.name;
+    // Simple markdown-ish rendering
+    let html = esc(data.body)
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/^- (.+)$/gm, '· $1')
+      .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\n\n/g, '<br><br>');
+    document.getElementById('dpBody').innerHTML = html;
+    document.getElementById('dpMeta').textContent = `文件: ${data.files.length} 个 | 路径: ${data.path}`;
+  } catch (e) {
+    document.getElementById('dpBody').innerHTML = '<div class="empty"><p>加载失败</p></div>';
+  }
+}
+
+async function deleteSkill(name) {
+  if (!confirm(`确定要卸载 "${name}" 吗？`)) return;
+  try {
+    const r = await fetch(API + `/api/skills/${name}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) { toast('已卸载'); loadSkills(); }
+  } catch (e) {
+    toast('卸载失败');
+  }
+}
+
+// ── Utils ──
+function esc(s) {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
