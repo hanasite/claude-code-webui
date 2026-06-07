@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@claude-sessions/web": "^0.4.9",
+    "claude-sessions-mcp": "^0.4.9"
+  }
+}

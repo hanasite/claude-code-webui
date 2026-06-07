@@ -31,6 +31,9 @@ SKILLS_DIRS = [
 SKILLHUB_SEARCH_URL = "https://api.skillhub.cn/api/v1/search"
 SKILLHUB_DOWNLOAD_URL = "https://api.skillhub.cn/api/v1/download"
 
+# MCP Sessions Web 服务地址（claude-sessions-mcp 内置 Web UI）
+MCP_WEB_URL = "http://localhost:5173"
+
 
 # ── helpers ──────────────────────────────────────────────────
 
@@ -84,8 +87,52 @@ def _ts_to_str(ts) -> str:
         return str(ts)
 
 
-def _get_sessions(project_path: Path, sort_by: str = "time_desc") -> list[dict]:
+def _project_key_to_dir(key: str) -> str:
+    """C--Users-kakun -> C:\\Users\\kakun（逐级验证+回溯，处理 _ 被编码为 -）"""
+    path = key.replace("--", ":\\").replace("-", "\\")
+    if os.path.exists(path):
+        return path
+
+    parts = path.split("\\")
+    # 确保驱动器后带 \
+    current = parts[0] if parts[0].endswith("\\") else parts[0] + "\\"
+    if len(current) == 2 and current[1] == ":":
+        current += "\\"
+
+    i = 1
+    while i < len(parts):
+        parent = current.rstrip("\\")
+        best = _try_match(parent, parts, i)
+        if best:
+            current, i = best
+        else:
+            # 找不到，回溯：退回上一级，把上一段和当前段合并
+            prev = parent[:parent.rfind("\\")] if "\\" in parent else parent
+            if prev and prev != parent:
+                backtrack = _try_match(prev, parts, i - 1)
+                if backtrack:
+                    current, i = backtrack
+                    continue
+            current = parent + "\\" + parts[i] if not parent.endswith("\\") else parent + parts[i]
+            i += 1
+    return current
+
+
+def _try_match(parent: str, parts: list, start: int):
+    """尝试从 start 位置合并若干段，找到存在于 parent 下的目录。返回 (full_path, new_i) 或 None"""
+    for j in range(len(parts) - start, 0, -1):
+        merged = parts[start:start+j]
+        for sep in ["_", " ", "-", ""]:
+            cand = sep.join(merged)
+            full = parent + "\\" + cand if not parent.endswith("\\") else parent + cand
+            if os.path.exists(full):
+                return (full, start + j)
+    return None
+
+
+def _get_sessions(project_path: Path, project_key: str = "", sort_by: str = "time_desc") -> list[dict]:
     """获取项目下所有会话"""
+    work_dir = _project_key_to_dir(project_key) if project_key else ""
     sessions = []
     if not project_path.exists():
         return sessions
@@ -132,7 +179,7 @@ def _get_sessions(project_path: Path, sort_by: str = "time_desc") -> list[dict]:
             "created_at": created_at,
             "last_message_at": last_time or created_at,
             "last_ts": last_ts,
-            "resume_command": f"claude --resume {sid}",
+            "resume_command": f'cd /d "{work_dir}" && claude --resume {sid}' if work_dir else f"claude --resume {sid}",
         })
 
     # 排序
@@ -170,6 +217,16 @@ def _save_labels(labels: dict):
     LABELS_FILE.write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _mcp_api(path: str) -> dict | list | None:
+    """调用 MCP Sessions Web API（自带正确路径解析）"""
+    try:
+        req = urllib.request.Request(f"{MCP_WEB_URL}{path}")
+        resp = urllib.request.urlopen(req, timeout=5)
+        return json.loads(resp.read())
+    except Exception:
+        return None
+
+
 # ── static files ─────────────────────────────────────────────
 
 @app.route("/")
@@ -181,24 +238,35 @@ def index():
 
 @app.route("/api/projects")
 def api_projects():
-    """列出所有项目"""
-    projects = []
-    if not PROJECTS_DIR.exists():
-        return jsonify(projects)
+    """列出所有项目（通过 MCP API）"""
+    mcp_data = _mcp_api("/api/projects")
+    if not mcp_data:
+        return jsonify([])
 
-    for d in sorted(PROJECTS_DIR.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        sessions = _get_sessions(d)
-        total_size = sum(s["size_bytes"] for s in sessions)
-        # 转换项目名: C--Users-kakun -> C:\Users\kakun
-        name = d.name.replace("--", ":").replace("-", "\\")
+    projects = []
+    for p in mcp_data:
+        key = p.get("name", "")
+        display = p.get("displayName", key)
+        # 规范化路径显示
+        if display == "~":
+            display = str(Path.home())
+        elif display.startswith("~/"):
+            display = str(Path.home() / display[2:])
+        display = display.replace("/", "\\")
+
+        # 补充 memory 文件信息
+        proj_dir = PROJECTS_DIR / key
+        memory_files = []
+        if (proj_dir / "memory").exists():
+            memory_files = [f.name for f in (proj_dir / "memory").glob("*.md")]
+
+        session_count = p.get("sessionCount", 0)
         projects.append({
-            "key": d.name,
-            "name": name,
-            "session_count": len(sessions),
-            "total_size": _format_size(total_size),
-            "memory_files": [f.name for f in (d / "memory").glob("*.md")] if (d / "memory").exists() else [],
+            "key": key,
+            "name": display,
+            "session_count": session_count,
+            "total_size": "0 B",  # MCP 暂不提供大小
+            "memory_files": memory_files,
         })
 
     return jsonify(projects)
@@ -206,18 +274,44 @@ def api_projects():
 
 @app.route("/api/sessions/<path:project_key>")
 def api_sessions(project_key: str):
-    """列出项目下所有会话，支持 ?sort=time_desc|time_asc|size|messages"""
-    try:
-        proj_path = _safe_path(project_key, PROJECTS_DIR)
-    except ValueError:
-        abort(400)
+    """列出项目下所有会话（通过 MCP API）+ 自定义标签"""
+    labels = _load_labels()
+    # 获取 MCP 项目数据以得到正确路径
+    mcp_projects = _mcp_api("/api/projects") or []
+    work_dir = ""
+    for p in mcp_projects:
+        if p.get("name") == project_key:
+            work_dir = p.get("displayName", "").replace("/", "\\")
+            if work_dir == "~":
+                work_dir = str(Path.home())
+            break
+
+    sessions_raw = _mcp_api(f"/api/sessions?project={project_key}")
+    if not sessions_raw:
+        sessions_raw = []
+
+    sessions = []
+    for s in sessions_raw:
+        sid = s.get("id", "")
+        sessions.append({
+            "id": sid,
+            "message_count": int(s.get("messageCount", 0)),
+            "size_bytes": 0,
+            "size_display": "-",
+            "title": s.get("title", f"会话 {sid[:8]}")[:100],
+            "created_at": s.get("createdAt", ""),
+            "last_message_at": s.get("updatedAt", ""),
+            "last_ts": 0,
+            "label": labels.get(sid, ""),
+            "resume_command": f'cd /d "{work_dir}" && claude --resume {sid}' if work_dir else f"claude --resume {sid}",
+        })
 
     sort_by = request.args.get("sort", "time_desc")
-    labels = _load_labels()
-    sessions = _get_sessions(proj_path, sort_by=sort_by)
-    for s in sessions:
-        if s["id"] in labels:
-            s["label"] = labels[s["id"]]
+    if sort_by == "time_asc":
+        sessions.reverse()
+    elif sort_by == "messages":
+        sessions.sort(key=lambda s: s["message_count"], reverse=True)
+
     return jsonify(sessions)
 
 
@@ -699,6 +793,35 @@ def _create_ssl_context():
 # ── Popup ────────────────────────────────────────────────────
 
 NOTIFY_SCRIPT = str(SKILLS_DIRS[0] / "task-notifier" / "scripts" / "notify.ps1")
+
+
+@app.route("/api/resume/<path:project_key>/<session_id>", methods=["POST"])
+def api_resume_session(project_key: str, session_id: str):
+    """在 CMD 窗口中启动 Claude Code 会话"""
+    session_id = os.path.basename(session_id)
+    # 从 MCP 获取项目路径
+    mcp_projects = _mcp_api("/api/projects") or []
+    work_dir = ""
+    for p in mcp_projects:
+        if p.get("name") == project_key:
+            work_dir = p.get("displayName", "").replace("/", "\\")
+            if work_dir == "~":
+                work_dir = str(Path.home())
+            break
+
+    if not work_dir:
+        abort(400, "无法确定项目目录")
+
+    cmd_line = f'cd /d "{work_dir}" && claude --resume {session_id}'
+
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", "start", "Claude Code", "cmd", "/k", cmd_line],
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+        )
+        return jsonify({"ok": True, "command": cmd_line})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/popup", methods=["POST"])

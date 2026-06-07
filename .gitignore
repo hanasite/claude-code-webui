@@ -3,3 +3,5 @@ __pycache__/
 templates/*.bak
 templates/*.bak
 start.sh
+node_modules/
+package-lock.json

@@ -320,7 +320,7 @@ async function loadSessions() {
             <button class="btn rename" onclick="event.stopPropagation();startRename('${s.id}')" title="重命名">✏️</button>
           </div>
           <div class="s-actions" onclick="event.stopPropagation()">
-            <button class="btn resume" onclick="resumeSession('${s.id}')" title="启动此会话">▶ 启动</button>
+            <button class="btn resume" onclick="resumeSession('${s.id}')" data-resume-cmd="${encodeURIComponent(s.resume_command)}" title="启动此会话">▶ 启动</button>
             <button class="btn" onclick="exportSession('${s.id}')" title="导出 Markdown">📥</button>
             <button class="btn danger" onclick="deleteSession('${s.id}')" title="删除">🗑</button>
           </div>
@@ -523,13 +523,27 @@ async function saveRename(sid) {
 
 // ── Resume ──
 async function resumeSession(sid) {
-  const cmd = `claude --resume ${sid}`;
-  try {
-    await navigator.clipboard.writeText(cmd);
-    toast(`已复制命令: ${cmd}`);
-  } catch (e) {
-    toast(`请在终端运行: ${cmd}`);
-  }
+  const card = document.getElementById(`sc-${sid}`);
+  const btn = card?.querySelector('.btn.resume');
+  const raw = btn?.getAttribute('data-resume-cmd') || '';
+  const cmd = raw ? decodeURIComponent(raw) : `claude --resume ${sid}`;
+
+  // 复制到剪贴板
+  try { await navigator.clipboard.writeText(cmd); } catch(e) {}
+
+  // 调用后端打开 CMD 窗口
+  fetch(`/api/resume/${currentProject}/${sid}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        toast('已打开 CMD 窗口，命令已复制到剪贴板。请在终端粘贴运行。');
+      } else {
+        toast('命令已复制到剪贴板。请在 CMD/PS 终端中粘贴运行。');
+      }
+    })
+    .catch(() => {
+      toast('命令已复制到剪贴板。请在 CMD/PS 终端中粘贴运行。');
+    });
 }
 
 // ── Skills ──
