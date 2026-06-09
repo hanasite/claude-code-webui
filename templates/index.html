@@ -260,7 +260,7 @@ async function loadProjects() {
       return;
     }
     list.innerHTML = projects.map(p => `
-      <div class="project-item" data-key="${p.key}" onclick="selectProject('${p.key}','${p.name.replace(/'/g,"\\'")}')">
+      <div class="project-item" data-key="${p.key}" onclick="selectProject('${p.key}',decodeURIComponent('${encodeURIComponent(p.name)}'))">
         <span class="icon">📁</span>
         <span class="info">
           <div class="name">${esc(p.name)}</div>
