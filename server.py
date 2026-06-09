@@ -88,8 +88,80 @@ def _ts_to_str(ts) -> str:
 
 
 def _project_key_to_dir(key: str) -> str:
-    """C--Users-kakun -> C:\\Users\\kakun（快速字符串替换）"""
-    return key.replace("--", ":\\").replace("-", "\\")
+    """C--Users-kakun -> C:\\Users\\kakun
+    优先从 session 文件提取真实 cwd（同 @claude-sessions/core 的策略），
+    降级为字符串替换 + 文件系统验证。
+    """
+    # 策略 1：从 session 文件读取真实 cwd（最准确）
+    real = _get_cwd_from_sessions(key)
+    if real:
+        return real
+
+    # 策略 2：字符串替换 + 文件系统存在性验证
+    path = key.replace("--", ":\\").replace("-", "\\")
+    if os.path.exists(path):
+        return path
+    return _fix_path_segments(path.split("\\"))
+
+
+def _get_cwd_from_sessions(project_key: str) -> str | None:
+    """从项目目录的 session 文件中提取真实 cwd（仿 @claude-sessions/core，带缓存）"""
+    if project_key in _cwd_cache:
+        return _cwd_cache[project_key]
+
+    project_dir = PROJECTS_DIR / project_key
+    if not project_dir.exists():
+        return None
+    try:
+        for f in sorted(project_dir.glob("*.jsonl")):
+            try:
+                with open(f, "r", encoding="utf-8") as fh:
+                    for _ in range(5):
+                        line = fh.readline()
+                        if not line:
+                            break
+                        try:
+                            d = json.loads(line.strip())
+                            if "cwd" in d and d["cwd"]:
+                                _cwd_cache[project_key] = str(d["cwd"])
+                                return _cwd_cache[project_key]
+                        except json.JSONDecodeError:
+                            continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _cwd_cache[project_key] = ""  # 空字符串表示已查过但没找到
+    return None
+
+
+def _fix_path_segments(parts: list) -> str:
+    """递归修正路径：合并相邻段直到找到存在的目录"""
+    current = parts[0]
+    if not os.path.exists(current):
+        return "\\".join(parts)
+
+    i = 1
+    while i < len(parts):
+        parent = current
+        found = None
+        # 尝试从 i 开始合并尽可能多的段
+        for j in range(len(parts) - i, -1, -1):
+            chunk = parts[i:i+j+1]
+            for sep in ["_", " ", "-", ""]:
+                cand = sep.join(chunk)
+                full = parent + "\\" + cand
+                if os.path.exists(full):
+                    found = (full, i + j + 1)
+                    break
+            if found:
+                break
+        if found:
+            current, i = found
+        else:
+            current += "\\" + parts[i]
+            i += 1
+    return current
 
 
 def _try_match(parent: str, parts: list, start: int):
@@ -191,8 +263,9 @@ def _save_labels(labels: dict):
     LABELS_FILE.write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# MCP 状态（启动时检测一次，后续用缓存）
+# MCP 状态（启动时检测一次，后续用缓存）和 cwd 缓存
 _mcp_online = False
+_cwd_cache = {}  # project_key -> real_path
 
 
 def _check_mcp():
