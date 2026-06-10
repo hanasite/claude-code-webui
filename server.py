@@ -939,7 +939,8 @@ def api_resume_session(project_key: str, session_id: str):
     if not work_dir:
         abort(400, "无法确定项目目录")
 
-    cmd_line = f'cd /d "{work_dir}" && claude --resume {session_id}'
+    cli = request.args.get("cli", "claude")
+    cmd_line = f'cd /d "{work_dir}" && {cli} --resume {session_id}'
 
     try:
         subprocess.Popen(

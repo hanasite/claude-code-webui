@@ -202,6 +202,10 @@
       <span class="count" id="mainCount"></span>
     </div>
     <div class="actions" id="mainActions">
+      <select class="sort-select" id="cliSelect" onchange="switchCLI()" title="选择 CLI 工具">
+        <option value="claude">claude</option>
+        <option value="ccb">ccb</option>
+      </select>
       <select class="sort-select" id="sortSelect" onchange="resort()" style="display:none">
         <option value="time_desc">最新 ↑</option>
         <option value="time_asc">最早 ↑</option>
@@ -233,6 +237,13 @@
 const API = '';
 let currentProject = null;
 let currentSessionId = null;
+let currentCLI = localStorage.getItem('webui-cli') || 'claude';
+document.getElementById('cliSelect').value = currentCLI;
+
+function switchCLI() {
+  currentCLI = document.getElementById('cliSelect').value;
+  localStorage.setItem('webui-cli', currentCLI);
+}
 
 // ── Init ──
 (async () => { await loadProjects(); })();
@@ -526,13 +537,15 @@ async function resumeSession(sid) {
   const card = document.getElementById(`sc-${sid}`);
   const btn = card?.querySelector('.btn.resume');
   const raw = btn?.getAttribute('data-resume-cmd') || '';
-  const cmd = raw ? decodeURIComponent(raw) : `claude --resume ${sid}`;
+  let cmd = raw ? decodeURIComponent(raw) : `claude --resume ${sid}`;
+  // 替换 CLI 工具名
+  cmd = cmd.replace(/^cd .+? && /, (m) => m).replace(/\bclaude\b/, currentCLI);
 
   // 复制到剪贴板
   try { await navigator.clipboard.writeText(cmd); } catch(e) {}
 
   // 调用后端打开 CMD 窗口
-  fetch(`/api/resume/${currentProject}/${sid}`, { method: 'POST' })
+  fetch(`/api/resume/${currentProject}/${sid}?cli=${currentCLI}`, { method: 'POST' })
     .then(r => r.json())
     .then(d => {
       if (d.ok) {
